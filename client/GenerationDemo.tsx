@@ -40,7 +40,12 @@ export function GenerationDemo({
   );
   const [phase, setPhase] = useState<Phase>("idle");
   const [stepIdx, setStepIdx] = useState(0);
-  const [inspectedStep, setInspectedStep] = useState<number | null>(null);
+  // Inspection has two channels: pinning (tap, click, or Enter) sticks until
+  // dismissed; hover and keyboard focus only preview, so sweeping the pointer
+  // across other tokens never cancels a selection. Touch has no hover at all —
+  // the pin is the interaction that works everywhere.
+  const [pinnedStep, setPinnedStep] = useState<number | null>(null);
+  const [previewStep, setPreviewStep] = useState<number | null>(null);
   const [diffsOnly, setDiffsOnly] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -85,7 +90,8 @@ export function GenerationDemo({
 
   function start() {
     setStepIdx(0);
-    setInspectedStep(null);
+    setPinnedStep(null);
+    setPreviewStep(null);
     setPhase("running");
   }
 
@@ -96,7 +102,8 @@ export function GenerationDemo({
 
   function reset() {
     setStepIdx(0);
-    setInspectedStep(null);
+    setPinnedStep(null);
+    setPreviewStep(null);
     setPhase("idle");
   }
 
@@ -107,6 +114,7 @@ export function GenerationDemo({
   const diffCount = diffs.slice(0, stepIdx).filter(Boolean).length;
 
   const shown = traceWm.steps.slice(0, stepIdx);
+  const inspectedStep = previewStep ?? pinnedStep;
   const decisionIndex = inspectedStep !== null && inspectedStep < shown.length
     ? inspectedStep
     : phase === "running" && stepIdx < traceWm.steps.length
@@ -150,8 +158,9 @@ export function GenerationDemo({
         </p>
       ) : null}
 
-      {/* The two runs, side by side */}
-      <div className="grid gap-0 md:grid-cols-2">
+      {/* The two runs: side by side on wide screens, one merged text on
+          phones, where two stacked panes would hide the lockstep story. */}
+      <div className="hidden md:grid md:grid-cols-2">
         <RunPane
           diffs={diffs}
           diffsOnly={diffsOnly}
@@ -160,8 +169,10 @@ export function GenerationDemo({
           headerClass="text-emerald-400"
           headerNote="30 keyed layers tilt the odds"
           mono={mono}
-          onInspect={setInspectedStep}
+          onInspect={setPinnedStep}
+          onPreview={setPreviewStep}
           phase={phase}
+          pinnedStep={pinnedStep}
           stepIdx={stepIdx}
           textClass={watermarkedTokenClasses}
           trace={traceWm}
@@ -174,11 +185,28 @@ export function GenerationDemo({
           headerClass="text-neutral-400"
           headerNote="ordinary sampling"
           mono={mono}
-          onInspect={setInspectedStep}
+          onInspect={setPinnedStep}
+          onPreview={setPreviewStep}
           phase={phase}
+          pinnedStep={pinnedStep}
           stepIdx={stepIdx}
           textClass={() => "text-neutral-300"}
           trace={tracePlain}
+        />
+      </div>
+      <div className="md:hidden">
+        <MobileComparisonPane
+          diffs={diffs}
+          diffsOnly={diffsOnly}
+          mono={mono}
+          onInspect={setPinnedStep}
+          onPreview={setPreviewStep}
+          phase={phase}
+          pinnedStep={pinnedStep}
+          stepIdx={stepIdx}
+          textClass={watermarkedTokenClasses}
+          tracePlain={tracePlain}
+          traceWm={traceWm}
         />
       </div>
 
@@ -191,7 +219,7 @@ export function GenerationDemo({
                 ? `the runs agree on all ${stepIdx} choices so far: the watermark shifts odds and never forces a word`
                 : <>
                     the runs disagree on <span className="font-mono text-amber-300">{diffCount}</span> of <span className="font-mono">{stepIdx}</span> choices
-                    <span className="ml-2 rounded-sm px-1 text-amber-300 ring-1 ring-amber-400/60">ringed above</span>
+                    <span className="ml-2 rounded-sm px-1 text-amber-300 ring-1 ring-amber-400/60">marked above</span>
                   </>}
             </span>
             <Button
@@ -312,13 +340,18 @@ export function GenerationDemo({
             ? `Generating ${traceWm.steps.length} tokens in lockstep.`
             : `Generation complete: ${stepIdx} tokens, ${diffCount} differing choices. Watermarked detector ${detectionWm?.verdict ?? "not enough text"}; unwatermarked detector ${detectionPlain?.verdict ?? "not enough text"}.`}
       </p>
-      <div className="grid gap-0 border-t border-neutral-800 md:grid-cols-2">
+      {/* Detector readouts: paired columns on wide screens; one shared-axis
+          face-off on phones, so the divergence stays a single glance. */}
+      <div className="hidden border-t border-neutral-800 md:grid md:grid-cols-2">
         <div className="px-4 py-3 md:border-r md:border-neutral-800">
           <DetectionStrip detection={detectionWm} label="detector · watermarked run" watermarked />
         </div>
-        <div className="border-t border-neutral-800 px-4 py-3 md:border-l md:border-t-0">
+        <div className="px-4 py-3 md:border-l">
           <DetectionStrip detection={detectionPlain} label="detector · unwatermarked run" />
         </div>
+      </div>
+      <div className="border-t border-neutral-800 md:hidden">
+        <DetectionFaceOff plain={detectionPlain} wm={detectionWm} />
       </div>
 
       {stepIdx > 0 ? (
@@ -343,7 +376,7 @@ function watermarkedTokenClasses(step: StepResult, differs: boolean): string {
   const pickedShift = picked.sampledProb - picked.baseProb;
   let cls = "text-neutral-200";
   if (step.watermarked) {
-    if (step.effectSize < 0.005) cls = "bg-sky-500/5 text-neutral-400 rounded-sm";
+    if (step.effectSize < 0.005) cls = "bg-sky-500/5 text-sky-100/70 rounded-sm";
     else if (pickedShift > 0) cls = "bg-emerald-500/20 text-emerald-100 rounded-sm";
     else cls = "bg-rose-500/10 text-rose-200/80 rounded-sm";
   } else {
@@ -383,6 +416,8 @@ function RunPane({
   phase,
   mono,
   onInspect,
+  onPreview,
+  pinnedStep,
   stepIdx,
   trace,
   watermark = false
@@ -397,6 +432,8 @@ function RunPane({
   phase: Phase;
   mono: boolean;
   onInspect: (i: number | null) => void;
+  onPreview: (i: number | null) => void;
+  pinnedStep: number | null;
   stepIdx: number;
   trace: TraceResult;
   watermark?: boolean;
@@ -415,7 +452,7 @@ function RunPane({
           {diffsOnly
             ? diffSegments(diffs, stepIdx).map((p, k) =>
                 p.kind === "token" ? (
-                  <TokenText differs={diffs[p.i]} index={p.i} key={p.i} onInspect={onInspect} step={trace.steps[p.i]} textClass={textClass} />
+                  <TokenText differs={diffs[p.i]} index={p.i} key={p.i} onInspect={onInspect} onPreview={onPreview} selected={pinnedStep === p.i} step={trace.steps[p.i]} textClass={textClass} />
                 ) : (
                   <span className="mx-1 inline-block select-none rounded-sm border border-neutral-800 bg-neutral-900/60 px-1.5 py-0.5 align-middle font-mono text-[11px] text-neutral-400" key={`c-${k}`} title={`${p.to - p.from} tokens chosen identically by both runs`}>
                     ·· {p.to - p.from} identical ··
@@ -423,7 +460,7 @@ function RunPane({
                 )
               )
             : shown.map((s, i) => (
-                <TokenText differs={diffs[i]} index={i} key={i} onInspect={onInspect} step={s} textClass={textClass} />
+                <TokenText differs={diffs[i]} index={i} key={i} onInspect={onInspect} onPreview={onPreview} selected={pinnedStep === i} step={s} textClass={textClass} />
               ))}
           {phase === "running" ? <span className="animate-pulse text-neutral-400 motion-reduce:animate-none">▊</span> : null}
           {phase === "idle" ? <span className="text-neutral-400 italic">press generate…</span> : null}
@@ -434,7 +471,7 @@ function RunPane({
             <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-neutral-400">
               <span><span className="bg-emerald-500/20 px-1 text-emerald-300">odds raised</span> the tournament increased this token's probability</span>
               <span><span className="bg-rose-500/10 px-1 text-rose-300">odds lowered</span> it remained possible and was still sampled</span>
-              <span><span className="bg-sky-500/5 px-1 text-neutral-400">unchanged</span> a peaked distribution left no meaningful mass to move</span>
+              <span><span className="bg-sky-500/5 px-1 text-sky-100/70">unchanged</span> a peaked distribution left no meaningful mass to move</span>
               <span><span className="rounded-sm px-1 text-amber-300 ring-1 ring-amber-400/70">ringed</span> the plain run chose a different token here</span>
             </div>
           </div>
@@ -451,49 +488,216 @@ function RunPane({
   );
 }
 
+/** Split a token's surface form so whitespace stays outside the marked
+ * element: backgrounds colour only the word, and rings cannot fragment when
+ * an inline token wraps across lines. */
+function splitToken(token: string): { lead: string; body: string; trail: string } {
+  const parts = /^(\s*)(.*?)(\s*)$/s.exec(token);
+  return { lead: parts?.[1] ?? "", body: parts?.[2] ?? token, trail: parts?.[3] ?? "" };
+}
+
+/** On phones, comparison happens by flipping one stable reading surface
+ * between the two runs. Changed choices stay highlighted in place, while the
+ * navigator below puts the current pair side by side without crushing the
+ * paragraph into two narrow columns or stacking words inside a line. */
+function MobileComparisonPane({
+  diffs,
+  diffsOnly,
+  mono,
+  onInspect,
+  onPreview,
+  phase,
+  pinnedStep,
+  stepIdx,
+  textClass,
+  tracePlain,
+  traceWm
+}: {
+  diffs: boolean[];
+  diffsOnly: boolean;
+  mono: boolean;
+  onInspect: (i: number | null) => void;
+  onPreview: (i: number | null) => void;
+  phase: Phase;
+  pinnedStep: number | null;
+  stepIdx: number;
+  textClass: (step: StepResult, differs: boolean) => string;
+  tracePlain: TraceResult;
+  traceWm: TraceResult;
+}) {
+  const [activeRun, setActiveRun] = useState<"watermarked" | "plain">("watermarked");
+  const activeTrace = activeRun === "watermarked" ? traceWm : tracePlain;
+  const shown = activeTrace.steps.slice(0, stepIdx);
+  const visibleDiffs = diffs.slice(0, stepIdx).flatMap((differs, i) => differs ? [i] : []);
+  const activeChoice = pinnedStep !== null && pinnedStep < stepIdx
+    ? pinnedStep
+    : visibleDiffs.at(-1) ?? null;
+  const activeDiffPosition = activeChoice === null ? -1 : visibleDiffs.indexOf(activeChoice);
+  const activeChoiceDiffers = activeDiffPosition >= 0;
+  const activeTextClass = activeRun === "watermarked"
+    ? (step: StepResult, differs: boolean) => textClass(step, false) + (differs ? " underline decoration-2 decoration-amber-400 underline-offset-4" : "")
+    : (_step: StepResult, differs: boolean) => differs
+      ? "text-neutral-200 underline decoration-2 decoration-amber-400 underline-offset-4"
+      : "text-neutral-300";
+
+  function moveDiff(direction: -1 | 1) {
+    if (!visibleDiffs.length) return;
+    const nextPosition = activeDiffPosition < 0
+      ? (direction < 0 ? visibleDiffs.length - 1 : 0)
+      : (activeDiffPosition + direction + visibleDiffs.length) % visibleDiffs.length;
+    onInspect(visibleDiffs[nextPosition]);
+  }
+
+  return (
+    <div>
+      <div className="border-b border-neutral-800 p-2">
+        <div aria-label="Choose the generated text to inspect" className="grid grid-cols-2 bg-neutral-900 p-1" role="tablist">
+          <button
+            aria-selected={activeRun === "watermarked"}
+            className={"min-h-11 border px-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400 " + (activeRun === "watermarked" ? "border-emerald-400/60 bg-emerald-400/12 text-emerald-200" : "border-transparent text-emerald-200/60")}
+            onClick={() => setActiveRun("watermarked")}
+            role="tab"
+            type="button"
+          >
+            <span className="block text-xs font-semibold">Watermarked</span>
+            <span className="block text-[11px] text-current/70">odds adjusted</span>
+          </button>
+          <button
+            aria-selected={activeRun === "plain"}
+            className={"min-h-11 border px-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 " + (activeRun === "plain" ? "border-sky-400/60 bg-sky-400/10 text-sky-200" : "border-transparent text-sky-200/60")}
+            onClick={() => setActiveRun("plain")}
+            role="tab"
+            type="button"
+          >
+            <span className="block text-xs font-semibold">Plain</span>
+            <span className="block text-[11px] text-current/70">ordinary sampling</span>
+          </button>
+        </div>
+      </div>
+      {activeChoice !== null ? (
+        <div className="border-b border-neutral-800 bg-neutral-900/35 px-2 py-2">
+          <div className="mb-1 flex items-center justify-between px-12 text-[11px] text-neutral-400">
+            <span className={"font-semibold uppercase tracking-wider " + (activeChoiceDiffers ? "text-amber-300" : "text-neutral-300")}>
+              {activeChoiceDiffers ? "Changed choice" : "Same choice"}
+            </span>
+            <span className="font-mono tabular-nums">
+              {activeChoiceDiffers ? `${activeDiffPosition + 1} / ${visibleDiffs.length}` : `token ${activeChoice + 1}`}
+            </span>
+          </div>
+          <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-stretch gap-1">
+            <button aria-label="Previous changed choice" className="grid min-h-11 place-items-center border border-neutral-800 text-neutral-300 hover:border-neutral-600 hover:bg-neutral-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400" onClick={() => moveDiff(-1)} type="button">
+              <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 16 16"><path d="m10 3-5 5 5 5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" /></svg>
+            </button>
+            <div className="grid grid-cols-2 divide-x divide-neutral-800 border border-neutral-800 bg-neutral-950">
+              <button className={"min-h-11 min-w-0 px-2 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-emerald-400 " + (activeRun === "watermarked" ? "bg-emerald-400/10" : "")} onClick={() => { setActiveRun("watermarked"); onInspect(activeChoice); }} type="button">
+                <span className="block text-[10px] uppercase tracking-wide text-emerald-400">watermarked</span>
+                <span className="block truncate text-sm font-semibold text-neutral-100">{splitToken(traceWm.steps[activeChoice].chosenToken).body || "␣"}</span>
+              </button>
+              <button className={"min-h-11 min-w-0 px-2 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-sky-400 " + (activeRun === "plain" ? "bg-sky-400/10" : "")} onClick={() => { setActiveRun("plain"); onInspect(activeChoice); }} type="button">
+                <span className="block text-[10px] uppercase tracking-wide text-sky-400">plain</span>
+                <span className="block truncate text-sm font-semibold text-neutral-100">{splitToken(tracePlain.steps[activeChoice].chosenToken).body || "␣"}</span>
+              </button>
+            </div>
+            <button aria-label="Next changed choice" className="grid min-h-11 place-items-center border border-neutral-800 text-neutral-300 hover:border-neutral-600 hover:bg-neutral-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400" onClick={() => moveDiff(1)} type="button">
+              <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 16 16"><path d="m6 3 5 5-5 5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" /></svg>
+            </button>
+          </div>
+        </div>
+      ) : stepIdx > 0 ? (
+        <p className="border-b border-neutral-800 px-4 py-3 text-xs text-neutral-400">No choices differ yet. Flip between the runs to compare the same generated text.</p>
+      ) : null}
+      <div className="min-h-45 px-4 py-5">
+        <div className={mono ? "whitespace-pre-wrap font-mono text-sm leading-6" : "text-[15px] leading-7"}>
+          {diffsOnly
+            ? diffSegments(diffs, stepIdx).map((p, k) =>
+                p.kind === "token" ? (
+                  <TokenText differs index={p.i} key={p.i} onInspect={onInspect} onPreview={onPreview} selected={pinnedStep === p.i} step={activeTrace.steps[p.i]} textClass={activeTextClass} />
+                ) : (
+                  <span className="mx-1 inline-block select-none rounded-sm border border-neutral-800 bg-neutral-900/60 px-1.5 py-0.5 align-middle font-mono text-[11px] text-neutral-400" key={`c-${k}`} title={`${p.to - p.from} tokens chosen identically by both runs`}>
+                    ·· {p.to - p.from} identical ··
+                  </span>
+                )
+              )
+            : shown.map((s, i) => (
+                <TokenText differs={diffs[i]} index={i} key={i} onInspect={onInspect} onPreview={onPreview} selected={pinnedStep === i} step={s} textClass={activeTextClass} />
+              ))}
+          {phase === "running" ? <span className="animate-pulse text-neutral-400 motion-reduce:animate-none">▊</span> : null}
+          {phase === "idle" ? <span className="text-neutral-400 italic">press generate…</span> : null}
+        </div>
+
+        {stepIdx > 0 ? (
+          <p className="mt-4 border-t border-neutral-900 pt-3 text-xs leading-5 text-neutral-400">
+            {activeRun === "watermarked"
+              ? "Color shows how the watermark moved the selected token's odds. Amber underlines mark choices that differ from the plain run."
+              : "Amber underlines mark the choices that changed when the watermark adjusted the odds."}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function TokenText({
   step,
   index,
   differs,
   onInspect,
+  onPreview,
+  selected = false,
   textClass
 }: {
   step: StepResult;
   index: number;
   differs: boolean;
   onInspect: (i: number | null) => void;
+  onPreview: (i: number | null) => void;
+  selected?: boolean;
   textClass: (step: StepResult, differs: boolean) => string;
 }) {
   const picked = step.candidates[step.chosenIndex];
   const pickedShift = picked.sampledProb - picked.baseProb;
-  // Candidate strings carry their own leading whitespace so generation and
-  // re-tokenization agree. Keep that whitespace outside the marked element:
-  // otherwise backgrounds colour the gap before a word and rings can split
-  // into odd fragments when an inline token wraps across lines.
-  const tokenParts = /^(\s*)(.*?)(\s*)$/s.exec(step.chosenToken);
-  const leadingWhitespace = tokenParts?.[1] ?? "";
-  const tokenBody = tokenParts?.[2] ?? step.chosenToken;
-  const trailingWhitespace = tokenParts?.[3] ?? "";
   const shiftNote = step.watermarked && step.effectSize >= 0.005
     ? (pickedShift > 0 ? "odds raised" : "odds lowered")
     : "no meaningful probability shift";
-  return (
-    <>
-      {leadingWhitespace}
+  const parts = splitToken(step.chosenToken);
+  // Inspection that works without hover: tap, click, or Enter pins the token
+  // (onInspect); mouse hover and keyboard focus only preview it (onPreview),
+  // so neither can silently cancel a pin.
+  const token = (
     <span
-      className={textClass(step, differs) + " inline-block cursor-help px-0.5 leading-[1.4] focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-sky-400"}
-      onBlur={() => onInspect(null)}
-      onFocus={() => onInspect(index)}
-      onMouseEnter={() => onInspect(index)}
-      onMouseLeave={() => onInspect(null)}
+      aria-pressed={selected}
+      className={textClass(step, differs)
+        + " inline-block cursor-pointer px-0.5 leading-[1.4] focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-sky-400"
+        + (selected ? " outline-2 outline-offset-1 outline-sky-400" : "")}
+      onBlur={() => onPreview(null)}
+      onClick={() => onInspect(selected ? null : index)}
+      onFocus={() => onPreview(index)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onInspect(selected ? null : index);
+        }
+      }}
+      onPointerEnter={(e) => {
+        if (e.pointerType === "mouse") onPreview(index);
+      }}
+      onPointerLeave={(e) => {
+        if (e.pointerType === "mouse") onPreview(null);
+      }}
+      role="button"
       tabIndex={0}
       title={differs
         ? "the two runs chose differently at this position"
         : `model ${formatProbability(picked.baseProb)} → sampled ${formatProbability(picked.sampledProb)}; ${shiftNote}`}
     >
-      {tokenBody || "␣"}
+      {parts.body || "␣"}
     </span>
-    {trailingWhitespace}
+  );
+  return (
+    <>
+      {parts.lead}
+      {token}
+      {parts.trail}
     </>
   );
 }
@@ -511,30 +715,36 @@ function scorePct(z: number): number {
   return Math.max(0, Math.min(100, ((z + 2) / 8) * 100));
 }
 
+const VERDICT_LABEL: Record<DetectionResult["verdict"], string> = {
+  strong: "strong watermark signal",
+  likely: "watermark likely present",
+  inconclusive: "too little text to tell",
+  none: "no watermark signal"
+};
+
+const VERDICT_TONE: Record<DetectionResult["verdict"], "green" | "amber" | "neutral"> = {
+  strong: "green",
+  likely: "green",
+  inconclusive: "amber",
+  none: "neutral"
+};
+
+function formatP(pValue: number): string {
+  return pValue < 0.001 ? pValue.toExponential(1) : pValue.toFixed(3);
+}
+
 function DetectionStrip({ detection, label, watermarked }: { detection: DetectionResult | null; label: string; watermarked?: boolean }) {
   if (!detection) {
     return <p className="text-xs text-neutral-400">{label}: waiting for enough text to score…</p>;
   }
 
   const pct = scorePct(detection.z);
-  const verdictLabel: Record<DetectionResult["verdict"], string> = {
-    strong: "strong watermark signal",
-    likely: "watermark likely present",
-    inconclusive: "too little text to tell",
-    none: "no watermark signal"
-  };
-  const verdictTone: Record<DetectionResult["verdict"], "green" | "amber" | "neutral"> = {
-    strong: "green",
-    likely: "green",
-    inconclusive: "amber",
-    none: "neutral"
-  };
 
   return (
     <div>
       <div className="mb-1.5 flex flex-wrap items-center gap-3">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">{label}</p>
-        <Badge tone={verdictTone[detection.verdict]}>{verdictLabel[detection.verdict]}</Badge>
+        <Badge tone={VERDICT_TONE[detection.verdict]}>{VERDICT_LABEL[detection.verdict]}</Badge>
         {!watermarked ? <Badge tone="blue">generated without a watermark</Badge> : null}
       </div>
       <div className="flex items-center gap-3">
@@ -557,8 +767,55 @@ function DetectionStrip({ detection, label, watermarked }: { detection: Detectio
         </p>
       </div>
       <p className="mt-1.5 text-[11px] leading-4 text-neutral-400">
-        one-sided p ≈ {detection.pValue < 0.001 ? detection.pValue.toExponential(1) : detection.pValue.toFixed(3)} from the weighted keyed-coin null (likely ≤ .01, strong ≤ .001).
+        one-sided p ≈ {formatP(detection.pValue)} from the weighted keyed-coin null (likely ≤ .01, strong ≤ .001).
       </p>
+    </div>
+  );
+}
+
+/** The phone readout: both detectors over one shared axis, so the runs'
+ * divergence stays a single glance instead of two stacked cards. */
+function DetectionFaceOff({ plain, wm }: { plain: DetectionResult | null; wm: DetectionResult | null }) {
+  return (
+    <div className="px-4 py-3">
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-neutral-400">detector · both runs</p>
+      <FaceOffRow detection={wm} label="watermarked" watermarked />
+      <div className="mt-3">
+        <FaceOffRow detection={plain} label="unwatermarked" />
+      </div>
+      <div className="relative mt-1 h-4 text-[11px] leading-4 text-neutral-400">
+        <span className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${scorePct(0)}%` }}>chance</span>
+        <span className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${scorePct(2.326)}%` }}>p=.01</span>
+        <span className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${scorePct(3.09)}%` }}>p=.001</span>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-4 text-neutral-400">
+        Both gauges share one axis; the ticks mark chance and the likely (p ≤ .01) and strong (p ≤ .001) verdicts of the weighted keyed-coin null.
+      </p>
+    </div>
+  );
+}
+
+function FaceOffRow({ detection, label, watermarked = false }: { detection: DetectionResult | null; label: string; watermarked?: boolean }) {
+  if (!detection) {
+    return <p className="text-xs text-neutral-400">{label}: waiting for enough text to score…</p>;
+  }
+  const pct = scorePct(detection.z);
+  return (
+    <div>
+      <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className={"text-xs font-semibold " + (watermarked ? "text-emerald-400" : "text-neutral-400")}>{label}</span>
+        <Badge tone={VERDICT_TONE[detection.verdict]}>{VERDICT_LABEL[detection.verdict]}</Badge>
+        <span className="font-mono text-[11px] text-neutral-500">
+          z {detection.z.toFixed(2)} · p ≈ {formatP(detection.pValue)} · mean g {detection.meanScore.toFixed(3)} · {detection.n} ngrams
+          {detection.masked > 0 ? ` · ${detection.masked} masked` : ""}
+        </span>
+      </div>
+      <div className="relative h-3 bg-neutral-900">
+        <div aria-hidden="true" className="absolute inset-y-0 w-px bg-neutral-500" style={{ left: `${scorePct(0)}%` }} />
+        <div aria-hidden="true" className="absolute inset-y-0 w-px bg-neutral-500" style={{ left: `${scorePct(2.326)}%` }} />
+        <div aria-hidden="true" className="absolute inset-y-0 w-px bg-neutral-400" style={{ left: `${scorePct(3.09)}%` }} />
+        <div className="h-full bg-linear-to-r from-neutral-600 via-sky-500 to-emerald-400 transition-all" style={{ width: `${pct}%` }} />
+      </div>
     </div>
   );
 }

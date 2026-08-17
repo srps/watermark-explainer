@@ -292,6 +292,9 @@ function scorePct(z: number): number {
 }
 
 function DetectionReport({ result, surfaces }: { result: DetectionResult; surfaces?: string[] }) {
+  // Chips are selectable rather than hover-only: touch has no hover, and a
+  // pinned selection also gives keyboard users a stable detail readout.
+  const [selectedChip, setSelectedChip] = useState<number | null>(null);
   const verdictMeta: Record<DetectionResult["verdict"], { label: string; cls: string }> = {
     strong: { label: "STRONG watermark signal", cls: "border-emerald-500/50 bg-emerald-500/10 text-emerald-300" },
     likely: { label: "Watermark LIKELY present", cls: "border-emerald-500/40 bg-emerald-500/5 text-emerald-400" },
@@ -364,15 +367,44 @@ function DetectionReport({ result, surfaces }: { result: DetectionResult; surfac
               : "border-neutral-800 bg-neutral-950 text-neutral-400";
           const label = surfaces?.[i] ?? String(s.tokenId);
           return (
-            <span className={"border px-1.5 py-0.5 font-mono text-xs " + cls} key={i} title={s.scored ? `mean g = ${gm.toFixed(2)} of 30 layers` : s.contextIds.length < 4 ? "no full context yet" : "repeated context: masked"}>
+            <span
+              aria-pressed={selectedChip === i}
+              className={"cursor-pointer border px-1.5 py-0.5 font-mono text-xs focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-sky-400 " + cls + (selectedChip === i ? " outline-2 outline-offset-1 outline-sky-400" : "")}
+              key={i}
+              onClick={() => setSelectedChip(selectedChip === i ? null : i)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setSelectedChip(selectedChip === i ? null : i);
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              title={s.scored ? `mean g = ${gm.toFixed(2)} of 30 layers` : s.contextIds.length < 4 ? "no full context yet" : "repeated context: masked"}
+            >
               {label.trim() || "␣"}
             </span>
           );
         })}
       </div>
+      <p aria-live="polite" className="mt-2 min-h-4 text-[11px] leading-4 text-neutral-300">
+        {selectedChip !== null && result.steps[selectedChip]
+          ? (() => {
+              const s = result.steps[selectedChip];
+              const gm = s.gValues.length ? s.gValues.reduce((a, g) => a + g, 0) / s.gValues.length : 0;
+              const label = (surfaces?.[selectedChip] ?? String(s.tokenId)).trim() || "␣";
+              if (!s.scored) {
+                return s.contextIds.length < 4
+                  ? <>token “{label}” · excluded: no full context yet (first n−1 positions)</>
+                  : <>token “{label}” · excluded: repeated context, masked from the score</>;
+              }
+              return <>token “{label}” · position {selectedChip + 1} · mean g = {gm.toFixed(2)} of 30 layers</>;
+            })()
+          : null}
+      </p>
       <p className="mt-3 text-[11px] leading-4 text-neutral-400">
         One chip per token; green = its 30 keyed g-values lean with the key, grey = they lean against it. Struck-through chips are excluded from the score:
-        the first n−1 positions (no full context yet) and repeated contexts. Hover for the per-token mean g.
+        the first n−1 positions (no full context yet) and repeated contexts. Select a chip for its per-token mean g.
       </p>
     </div>
   );
