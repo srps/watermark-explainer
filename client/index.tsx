@@ -158,6 +158,11 @@ export function App() {
               How Claude's text watermark works
             </ExternalLink>
             .</p>
+            <p className="mt-2">
+              <ExternalLink className="text-neutral-400 underline decoration-neutral-700 underline-offset-2 hover:text-neutral-200" href="https://github.com/srps/watermark-explainer">
+                View source on GitHub
+              </ExternalLink>
+            </p>
           </div>
         </footer>
       </div>
