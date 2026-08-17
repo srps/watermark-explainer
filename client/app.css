@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* The article spine stays readable while demos, grids, and tables use the canvas. */
+@utility reading-rail {
+  max-width: 46rem;
+}
